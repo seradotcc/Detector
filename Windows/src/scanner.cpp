@@ -32,78 +32,71 @@ const char* WEEDHACK_RULE = R"(
     }
 )";
 
-// The Callback: YARA triggers this whenever it analyzes a file
+// Custom struct to pass multiple things into the callback
+struct ScanUserData {
+    const ExtractedFile* file;
+    ScanResult* result;
+};
+
 int yaraCallback(YR_SCAN_CONTEXT* context, int message, void* message_data, void* user_data) {
     if (message == CALLBACK_MSG_RULE_MATCHING) {
         YR_RULE* rule = (YR_RULE*)message_data;
+        ScanUserData* data = (ScanUserData*)user_data;
 
-        // Cast user_data back to our ExtractedFile struct pointer
-        const ExtractedFile* file = (const ExtractedFile*)user_data;
+        // Mark it as infected
+        data->result->isInfected = true;
 
-        std::cout << "\n[!] Trace Detected\n";
-        std::cout << "Matched Rule: " << rule->identifier << " (in " << file->filename << ")\n";
+        // Build the report string
+        data->result->reportText += "Matched Rule: " + std::string(rule->identifier) + "\n";
+        data->result->reportText += "Tainted File: " + data->file->filename + "\n";
 
-        // If we hit the config file, let's extract the Campaign ID!
         if (std::string(rule->identifier) == "Weedhack_Fake_Config") {
-
-            // Convert our memory buffer into a standard C++ string
-            std::string fileData(file->data.begin(), file->data.end());
-
-            // Use a C++ regex capture group to grab ONLY the 36-character UUID
-            std::regex extract_uuid(R"REGEX("api_version"\s*:\s*"([a-fA-F0-9\-]{36})")REGEX"); std::smatch match;
+            std::string fileData(data->file->data.begin(), data->file->data.end());
+            std::regex extract_uuid(R"REGEX("api_version"\s*:\s*"([a-fA-F0-9\-]{36})")REGEX");
+            std::smatch match;
 
             if (std::regex_search(fileData, match, extract_uuid) && match.size() > 1) {
-                std::cout << "Campaign ID : " << match[1].str() << "\n";
+                data->result->reportText += "Campaign ID : " + match[1].str() + "\n";
             }
         }
+        data->result->reportText += "\n"; // Add a blank line between multiple detections
     }
     return CALLBACK_CONTINUE;
 }
 
-void scanFilesForWeedhack(const std::vector<ExtractedFile>& files) {
+ScanResult scanFilesForTraces(const std::vector<ExtractedFile>& files) {
+    ScanResult finalResult = { false, "" };
+
     if (yr_initialize() != ERROR_SUCCESS) {
-        std::cerr << "[!] Failed to initialize YARA engine.\n";
-        return;
+        finalResult.reportText = "Failed to initialize YARA engine.";
+        return finalResult;
     }
 
     YR_COMPILER* compiler = nullptr;
     YR_RULES* rules = nullptr;
 
-    if (yr_compiler_create(&compiler) != ERROR_SUCCESS) {
-        std::cerr << "[!] Failed to create YARA compiler.\n";
-        yr_finalize();
-        return;
-    }
-
-    if (yr_compiler_add_string(compiler, WEEDHACK_RULE, nullptr) != 0) {
-        std::cerr << "[!] Failed to compile YARA rules.\n";
-        yr_compiler_destroy(compiler);
-        yr_finalize();
-        return;
-    }
-
+    yr_compiler_create(&compiler);
+    yr_compiler_add_string(compiler, WEEDHACK_RULE, nullptr);
     yr_compiler_get_rules(compiler, &rules);
 
-    std::cout << "[*] YARA Engine loaded. Scanning " << files.size() << " extracted files...\n";
-
     for (const auto& file : files) {
-        // Notice we are passing the memory address of the WHOLE file struct (&file) as user_data
-        int result = yr_rules_scan_mem(
+        // Pack our file pointer and our result pointer into the custom struct
+        ScanUserData userData = { &file, &finalResult };
+
+        yr_rules_scan_mem(
             rules,
             (const uint8_t*)file.data.data(),
             file.data.size(),
             0,
             yaraCallback,
-            (void*)&file,
+            (void*)&userData, // Pass the struct!
             0
         );
-
-        if (result != ERROR_SUCCESS) {
-            std::cerr << "[-] Error scanning file: " << file.filename << "\n";
-        }
     }
 
     yr_rules_destroy(rules);
     yr_compiler_destroy(compiler);
     yr_finalize();
+
+    return finalResult;
 }

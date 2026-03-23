@@ -1,0 +1,12 @@
+Samples/
+
+build/
+bin/
+obj/
+*.exe
+*.o
+*.so
+*.dll
+
+.DS_Store
+Thumbs.db

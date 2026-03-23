@@ -3,10 +3,14 @@ Samples/
 build/
 bin/
 obj/
+.vs/
+Windows.slnx/
+x64/
 *.exe
 *.o
 *.so
 *.dll
+*.obj
 
 .DS_Store
 Thumbs.db
